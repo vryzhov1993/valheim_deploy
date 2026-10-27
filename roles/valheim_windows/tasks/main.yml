@@ -103,6 +103,8 @@
       - "{{ valheim_root }}\\server"
       - +login
       - anonymous
+      - +app_info_update
+      - '1'
       - +app_update
       - '896660'
       - validate

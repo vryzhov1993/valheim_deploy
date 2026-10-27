@@ -103,7 +103,7 @@ Stop-Service ValheimDedicatedServer
 Start-Service ValheimDedicatedServer
 ```
 
-WinSW посылает консольному процессу сигнал штатной остановки и ждёт до 120 секунд, затем принудительно завершает зависший процесс. Windows-роль скачивает игру при первой установке; периодические обновления SteamCMD не включены. Для обновления остановите службу, выполните `steamcmd\steamcmd.exe +force_install_dir "C:\ValheimServer\server" +login anonymous +app_update 896660 validate +quit`, затем запустите службу. При собственном `valheim_root` измените пути в этих командах.
+WinSW посылает консольному процессу сигнал штатной остановки и ждёт до 120 секунд, затем принудительно завершает зависший процесс. Windows-роль скачивает игру при первой установке; периодические обновления SteamCMD не включены. Для обновления остановите службу, выполните `steamcmd\steamcmd.exe +force_install_dir "C:\ValheimServer\server" +login anonymous +app_info_update 1 +app_update 896660 validate +quit`, затем запустите службу. При собственном `valheim_root` измените пути в этих командах.
 
 ## Сеть
 
