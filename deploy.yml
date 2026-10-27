@@ -1,0 +1,6 @@
+---
+- name: Prepare or deploy Valheim on a Linux VPS
+  hosts: valheim
+  become: true
+  roles:
+    - valheim

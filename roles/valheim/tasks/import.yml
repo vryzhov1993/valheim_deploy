@@ -1,0 +1,92 @@
+---
+- name: Check initial import marker
+  ansible.builtin.stat:
+    path: "{{ valheim_root }}/config/.valheim-bundle.json"
+  register: valheim_import_marker
+
+- name: Import into an empty configuration directory
+  when:
+    - not valheim_import_marker.stat.exists
+    - not ansible_check_mode
+  block:
+    - name: Create empty configuration directory
+      ansible.builtin.file:
+        path: "{{ valheim_root }}/config"
+        state: directory
+        owner: "{{ valheim_uid }}"
+        group: "{{ valheim_gid }}"
+        mode: '0700'
+
+    - name: Look for existing data before import
+      ansible.builtin.find:
+        paths: "{{ valheim_root }}/config"
+        hidden: true
+        file_type: any
+      register: valheim_existing_config
+
+    - name: Refuse to overwrite an existing world or configuration
+      ansible.builtin.assert:
+        that: valheim_existing_config.matched == 0
+        fail_msg: Configuration is not empty and has no import marker. Back it up and inspect it; automatic overwrite is refused.
+
+    - name: Create private staging directory on the same filesystem
+      ansible.builtin.tempfile:
+        state: directory
+        path: "{{ valheim_root }}"
+        prefix: .import-
+      register: valheim_staging
+
+    - name: Decrypt and stage the bundle
+      block:
+        - name: Transfer and decrypt Ansible Vault blob
+          ansible.builtin.copy:
+            src: "{{ valheim_bundle }}"
+            dest: "{{ valheim_staging.path }}/bundle.tar.gz"
+            mode: '0600'
+            decrypt: true
+          no_log: true
+          diff: false
+
+        - name: Extract world, access lists, mods and manifest
+          ansible.builtin.unarchive:
+            src: "{{ valheim_staging.path }}/bundle.tar.gz"
+            dest: "{{ valheim_staging.path }}"
+            remote_src: true
+            owner: "{{ valheim_uid }}"
+            group: "{{ valheim_gid }}"
+          no_log: true
+
+        - name: Read staged manifest
+          ansible.builtin.slurp:
+            src: "{{ valheim_staging.path }}/config/.valheim-bundle.json"
+          register: valheim_staged_manifest
+
+        - name: Validate bundle world before import
+          ansible.builtin.assert:
+            that:
+              - (valheim_staged_manifest.content | b64decode | from_json)['schema'] == 1
+              - (valheim_staged_manifest.content | b64decode | from_json)['world'] == valheim_world
+
+        # Moving the directory also installs the marker, so the import commits once.
+        - name: Atomically install configuration in the empty destination
+          ansible.builtin.command:
+            argv: [mv, -T, --, "{{ valheim_staging.path }}/config", "{{ valheim_root }}/config"]
+          changed_when: true
+      always:
+        - name: Remove plaintext staging archive
+          ansible.builtin.file:
+            path: "{{ valheim_staging.path }}"
+            state: absent
+
+- name: Verify installed world identity
+  when: not ansible_check_mode
+  block:
+    - name: Read installed import marker
+      ansible.builtin.slurp:
+        src: "{{ valheim_root }}/config/.valheim-bundle.json"
+      register: valheim_installed_manifest
+
+    - name: Refuse a world name that differs from the imported bundle
+      ansible.builtin.assert:
+        that: (valheim_installed_manifest.content | b64decode | from_json)['world'] == valheim_world
+        fail_msg: Use the world name stored in the imported bundle; renaming it would create a new empty world.

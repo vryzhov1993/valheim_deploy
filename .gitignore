@@ -1,0 +1,10 @@
+.venv/
+.local/
+.vault-pass
+inventory.yml
+__pycache__/
+*.pyc
+*.retry
+*.tar.gz
+*.zip
+!files/*.vault

@@ -1,0 +1,73 @@
+---
+- name: Exercise preparation twice without starting a game container
+  hosts: localhost
+  connection: local
+  become: true
+  vars:
+    valheim_install_docker: false
+    valheim_start: false
+    valheim_root: /tmp/valheim-ansible-smoke/server
+    valheim_bundle: /tmp/valheim-ansible-smoke/fixture.vault
+    valheim_server_password: smoke-game-password
+  tasks:
+    - name: First preparation
+      ansible.builtin.include_role:
+        name: valheim
+
+    - name: Simulate progress in the imported world
+      ansible.builtin.copy:
+        content: new-progress
+        dest: "{{ valheim_root }}/config/worlds_local/purgatory/1_1.chunk"
+        owner: '568'
+        group: '568'
+        mode: '0600'
+
+    - name: Second preparation
+      ansible.builtin.include_role:
+        name: valheim
+
+    - name: Read world after the second run
+      ansible.builtin.slurp:
+        src: "{{ valheim_root }}/config/worlds_local/purgatory/1_1.chunk"
+      register: smoke_world
+
+    - name: Look for leftover plaintext archives
+      ansible.builtin.find:
+        paths: "{{ valheim_root }}"
+        patterns: '.import-*'
+        hidden: true
+        file_type: directory
+      register: smoke_staging
+
+    - name: Check no game container was created
+      ansible.builtin.command: docker ps --all --quiet --filter label=com.docker.compose.project=valheim
+      register: smoke_container
+      changed_when: false
+
+    - name: Check data preservation, cleanup and preparation mode
+      ansible.builtin.assert:
+        that:
+          - (smoke_world.content | b64decode) == 'new-progress'
+          - smoke_staging.matched == 0
+          - smoke_container.stdout == ''
+
+    - name: Create an unmarked existing world
+      ansible.builtin.file:
+        path: /tmp/valheim-ansible-smoke/existing/config/worlds_local
+        state: directory
+        mode: '0700'
+
+    - name: Attempt import into an existing configuration
+      block:
+        - name: Try the role against existing data
+          ansible.builtin.include_role:
+            name: valheim
+          vars:
+            valheim_root: /tmp/valheim-ansible-smoke/existing
+        - name: Fail if overwrite protection did not trigger
+          ansible.builtin.fail:
+            msg: Existing configuration was accepted unexpectedly.
+      rescue:
+        - name: Require the expected refusal
+          ansible.builtin.assert:
+            that: ansible_failed_task.name == 'Refuse to overwrite an existing world or configuration'

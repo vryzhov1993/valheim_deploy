@@ -1,0 +1,45 @@
+services:
+  valheim:
+    image: {{ valheim_image | to_json }}
+    restart: unless-stopped
+    stop_grace_period: 120s
+    mem_limit: {{ valheim_memory_limit | to_json }}
+    labels:
+      # Detect secret changes even if a previous run only prepared the files.
+      io.valheim.password-revision: {{ (valheim_password_stat.stat.mtime | default(0) | string) | to_json }}
+    ports:
+      - "2456:2456/udp"
+      - "2457:2457/udp"
+    volumes:
+      - ./config:/config
+      - ./data:/opt/valheim
+    secrets:
+      - server_password
+    environment:
+      WORLD_NAME: {{ valheim_world | to_json }}
+      SERVER_NAME: {{ valheim_server_name | replace('$', '$$') | to_json }}
+      SERVER_PASS_FILE: /run/secrets/server_password
+      SERVER_PORT: "2456"
+      SERVER_PUBLIC: {{ (valheim_public | bool) | ternary('true', 'false') | to_json }}
+      CROSSPLAY: "false"
+      SERVER_ARGS: "-saveinterval 600"
+      BEPINEX: "true"
+      PUID: {{ valheim_uid | string | to_json }}
+      PGID: {{ valheim_gid | string | to_json }}
+      TZ: {{ valheim_timezone | to_json }}
+      PERMISSIONS_UMASK: "077"
+      BACKUPS: "true"
+      BACKUPS_CRON: "5 * * * *"
+      BACKUPS_MAX_AGE: {{ valheim_backups_max_age | string | to_json }}
+      UPDATE_CRON: "*/15 * * * *"
+      UPDATE_IF_IDLE: "true"
+      RESTART_CRON: ""
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+secrets:
+  server_password:
+    file: ./server-password

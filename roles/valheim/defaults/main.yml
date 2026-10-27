@@ -1,0 +1,16 @@
+---
+valheim_root: /opt/valheim
+valheim_image: ghcr.io/community-valheim-tools/valheim-server@sha256:1a0497aa5e42a9c95ef3f8d71f15bf9b5ae825d4ee54fd2a878e4a3ce25cb99c
+valheim_install_docker: true
+# Preparation never starts the game. Set explicitly when ready to play.
+valheim_start: false
+valheim_bundle: "{{ playbook_dir }}/files/server-bundle.tar.gz.vault"
+valheim_world: purgatory
+valheim_server_name: Purgatory
+valheim_public: false
+valheim_timezone: Europe/Chisinau
+valheim_memory_limit: 6g
+valheim_uid: 568
+valheim_gid: 568
+valheim_restart_hour: "05"
+valheim_backups_max_age: 7

@@ -1,0 +1,122 @@
+---
+- name: Validate target and deployment settings
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+      - ansible_facts['architecture'] == 'x86_64'
+      - valheim_root is match('^/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+$')
+      - valheim_root not in ['/', '/opt', '/srv', '/var', '/home', '/etc', '/usr', '/root']
+      - "'..' not in valheim_root.split('/')"
+      - valheim_world is match('^[A-Za-z0-9_-]+$')
+      - valheim_restart_hour is match('^(0[0-9]|1[0-9]|2[0-3])$')
+      - valheim_timezone is match('^[A-Za-z_]+/[A-Za-z_/+-]+$')
+    fail_msg: Use Debian/Ubuntu amd64, a dedicated absolute directory and valid world/time settings.
+
+- name: Validate the encrypted game password
+  ansible.builtin.assert:
+    that:
+      - valheim_server_password is defined
+      - valheim_server_password | default('') | length >= 5
+      - "'\n' not in (valheim_server_password | default(''))"
+      - "'\r' not in (valheim_server_password | default(''))"
+    fail_msg: Define valheim_server_password in Vault with at least five characters and no newlines.
+  no_log: true
+
+- name: Install archive tools and cron
+  ansible.builtin.apt:
+    name: [ca-certificates, tar, gzip, cron]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install Docker Engine and Compose plugin
+  ansible.builtin.import_tasks: docker.yml
+  when: valheim_install_docker | bool
+
+- name: Check Compose plugin
+  ansible.builtin.command: docker compose version --short
+  changed_when: false
+  check_mode: false
+
+- name: Create private deployment directory
+  ansible.builtin.file:
+    path: "{{ valheim_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Import initial world and mod bundle once
+  ansible.builtin.import_tasks: import.yml
+
+- name: Create persistent game installation directory
+  ansible.builtin.file:
+    path: "{{ valheim_root }}/data"
+    state: directory
+    owner: "{{ valheim_uid }}"
+    group: "{{ valheim_gid }}"
+    mode: '0700'
+
+- name: Write password for container secret
+  ansible.builtin.copy:
+    content: "{{ valheim_server_password }}"
+    dest: "{{ valheim_root }}/server-password"
+    owner: "{{ valheim_uid }}"
+    group: "{{ valheim_gid }}"
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Track password file revision without publishing its content or hash
+  ansible.builtin.stat:
+    path: "{{ valheim_root }}/server-password"
+    get_checksum: false
+  register: valheim_password_stat
+
+- name: Render Docker Compose configuration
+  ansible.builtin.template:
+    src: compose.yaml.j2
+    dest: "{{ valheim_root }}/compose.yaml"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Validate Compose configuration without starting anything
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --project-name
+      - valheim
+      - --file
+      - "{{ valheim_root }}/compose.yaml"
+      - config
+      - --quiet
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Start Valheim only when explicitly enabled
+  community.docker.docker_compose_v2:
+    project_src: "{{ valheim_root }}"
+    project_name: valheim
+    files: [compose.yaml]
+    state: present
+    pull: missing
+  when: valheim_start | bool
+  no_log: true
+
+- name: Schedule daily container restart after deployment
+  ansible.builtin.template:
+    src: cron.j2
+    dest: /etc/cron.d/valheim
+    owner: root
+    group: root
+    mode: '0644'
+  when: valheim_start | bool
+
+- name: Ensure cron runs for the daily container restart
+  ansible.builtin.service:
+    name: cron
+    state: started
+    enabled: true
+  when: valheim_start | bool

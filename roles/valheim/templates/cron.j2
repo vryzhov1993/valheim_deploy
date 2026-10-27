@@ -1,0 +1,4 @@
+# The host timezone is unchanged; the hourly guard follows Chisinau including DST.
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 * * * * root [ "$(TZ={{ valheim_timezone | quote }} /usr/bin/date +\%H)" = "{{ valheim_restart_hour }}" ] && /usr/bin/docker compose -p valheim -f {{ (valheim_root ~ '/compose.yaml') | quote }} ps --status running --services | /usr/bin/grep -qx valheim && /usr/bin/docker compose -p valheim -f {{ (valheim_root ~ '/compose.yaml') | quote }} restart --timeout 120 valheim
