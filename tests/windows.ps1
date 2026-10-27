@@ -111,7 +111,7 @@ public class FakeValheim {
 '@
     $name = 'ValheimSmoke-' + [guid]::NewGuid().ToString('N')
     $signal = Join-Path $testRoot 'fake-signal'
-    $xml = "<service><id>$name</id><name>$name</name><executable>$exe</executable><arguments>$signal</arguments><startmode>Manual</startmode><stoptimeout>10 sec</stoptimeout><log mode=`"none`"/></service>"
+    $xml = "<service><id>$name</id><name>$name</name><description>Valheim service lifecycle test</description><executable>$exe</executable><arguments>$signal</arguments><startmode>Manual</startmode><stoptimeout>10 sec</stoptimeout><log mode=`"append`"/></service>"
     [IO.File]::WriteAllText((Join-Path $testRoot 'service-test.xml'), $xml)
     try {
         & $wrapper install
