@@ -1,0 +1,6 @@
+---
+- name: Parse the full Windows role without connecting to a Windows host
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - valheim_windows

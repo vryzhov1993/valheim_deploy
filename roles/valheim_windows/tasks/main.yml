@@ -1,0 +1,181 @@
+---
+- name: Validate Windows settings
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['os_family'] == 'Windows'
+      - valheim_world is match('^[A-Za-z0-9_-]+$')
+      - valheim_windows_service is match('^[A-Za-z][A-Za-z0-9_-]+$')
+      - valheim_windows_autostart in ['logon', 'boot']
+      - valheim_windows_restart_time is match('^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]:00$')
+      - valheim_backups_max_age | int > 0
+
+- name: Validate encrypted game password
+  ansible.builtin.assert:
+    that:
+      - valheim_server_password | default('') | length >= 5
+      - "'\n' not in (valheim_server_password | default(''))"
+      - "'\r' not in (valheim_server_password | default(''))"
+  no_log: true
+
+- name: Validate administrator access and initialize isolated directory
+  ansible.windows.win_powershell:
+    script: |
+      param([string]$Root)
+      if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'An amd64 Windows host is required.' }
+      $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+      if (-not [Security.Principal.WindowsPrincipal]::new($identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+          throw 'Connect with an elevated administrator account.'
+      }
+      {{ lookup('ansible.builtin.file', role_path ~ '/files/deployment.ps1') }}
+      $Ansible.Changed = Initialize-Deployment -Root $Root
+    parameters:
+      Root: "{{ valheim_root }}"
+
+- name: Allow administrators and SYSTEM to access the deployment
+  ansible.windows.win_acl:
+    path: "{{ valheim_root }}"
+    user: "{{ item }}"
+    rights: FullControl
+    type: allow
+    inherit: ContainerInherit,ObjectInherit
+    state: present
+  loop: ['S-1-5-32-544', 'S-1-5-18']
+
+- name: Remove inherited access to the private deployment
+  ansible.windows.win_acl_inheritance:
+    path: "{{ valheim_root }}"
+    state: absent
+    reorganize: false
+
+- name: Create deployment directories
+  ansible.windows.win_file:
+    path: "{{ valheim_root }}\\{{ item }}"
+    state: directory
+  loop: [downloads, steamcmd, server, service, logs]
+
+- name: Inspect existing service
+  ansible.windows.win_service_info:
+    name: "{{ valheim_windows_service }}"
+  register: valheim_windows_existing_service
+
+- name: Refuse to adopt an unrelated service
+  ansible.builtin.assert:
+    that: >-
+      not valheim_windows_existing_service.exists or
+      (valheim_windows_existing_service.services[0].path | lower | trim('"')) ==
+      ((valheim_root ~ '\\service\\valheim-service.exe') | lower)
+
+- name: Install Microsoft Visual C++ runtime when missing
+  ansible.windows.win_package:
+    path: https://aka.ms/vs/17/release/vc_redist.x64.exe
+    arguments: /install /quiet /norestart
+    creates_path: C:\Windows\System32\vcruntime140_1.dll
+    expected_return_code: [0, 1638, 3010]
+    state: present
+  register: valheim_windows_vcredist
+
+- name: Require a manual reboot if the runtime installer requests it
+  ansible.builtin.assert:
+    that: not (valheim_windows_vcredist.reboot_required | default(false))
+    fail_msg: Visual C++ runtime requires a Windows reboot. Reboot the host manually, then rerun this playbook.
+
+- name: Download SteamCMD bootstrap
+  ansible.windows.win_get_url:
+    url: https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip
+    dest: "{{ valheim_root }}\\downloads\\steamcmd.zip"
+
+- name: Extract SteamCMD once
+  community.windows.win_unzip:
+    src: "{{ valheim_root }}\\downloads\\steamcmd.zip"
+    dest: "{{ valheim_root }}\\steamcmd"
+    creates: "{{ valheim_root }}\\steamcmd\\steamcmd.exe"
+
+- name: Check successful Steam installation marker
+  ansible.windows.win_stat:
+    path: "{{ valheim_root }}\\service\\game-installed"
+  register: valheim_windows_game_installed
+
+- name: Download Valheim Dedicated Server without running the game
+  ansible.windows.win_command:
+    argv:
+      - "{{ valheim_root }}\\steamcmd\\steamcmd.exe"
+      - +force_install_dir
+      - "{{ valheim_root }}\\server"
+      - +login
+      - anonymous
+      - +app_update
+      - '896660'
+      - validate
+      - +quit
+    chdir: "{{ valheim_root }}\\steamcmd"
+    creates: "{{ valheim_root }}\\service\\game-installed"
+  register: valheim_windows_steamcmd
+  when: not valheim_windows_game_installed.stat.exists
+  failed_when: >-
+    valheim_windows_steamcmd.rc != 0 or
+    "Success! App '896660' fully installed." not in valheim_windows_steamcmd.stdout
+
+- name: Verify dedicated server executable
+  ansible.windows.win_stat:
+    path: "{{ valheim_root }}\\server\\valheim_server.exe"
+  register: valheim_windows_executable
+
+- name: Require a complete SteamCMD installation
+  ansible.builtin.assert:
+    that: valheim_windows_executable.stat.exists
+
+- name: Record successful game installation
+  ansible.windows.win_copy:
+    content: 'Steam app 896660 installed'
+    dest: "{{ valheim_root }}\\service\\game-installed"
+
+- name: Import initial configuration from encrypted ZIP
+  ansible.builtin.import_tasks: import.yml
+
+- name: Download pinned BepInEx pack
+  ansible.windows.win_get_url:
+    url: "https://thunderstore.io/package/download/denikson/BepInExPack_Valheim/{{ valheim_windows_bepinex_version }}/"
+    dest: "{{ valheim_root }}\\downloads\\bepinex.zip"
+    checksum: "{{ valheim_windows_bepinex_sha256 }}"
+    checksum_algorithm: sha256
+
+- name: Extract pinned BepInEx pack
+  community.windows.win_unzip:
+    src: "{{ valheim_root }}\\downloads\\bepinex.zip"
+    dest: "{{ valheim_root }}\\downloads\\bepinex-{{ valheim_windows_bepinex_version }}"
+    creates: "{{ valheim_root }}\\downloads\\bepinex-{{ valheim_windows_bepinex_version }}\\BepInExPack_Valheim\\winhttp.dll"
+
+- name: Install BepInEx and link the imported mods and configuration
+  ansible.windows.win_powershell:
+    script: |
+      param([string]$Root, [string]$Source, [bool]$ServiceRunning)
+      {{ lookup('ansible.builtin.file', role_path ~ '/files/deployment.ps1') }}
+      $Ansible.Changed = Install-BepInEx -Root $Root -Source $Source -ServiceRunning $ServiceRunning
+    parameters:
+      Root: "{{ valheim_root }}"
+      Source: "{{ valheim_root }}\\downloads\\bepinex-{{ valheim_windows_bepinex_version }}\\BepInExPack_Valheim"
+      ServiceRunning: "{{ valheim_windows_existing_service.exists and valheim_windows_existing_service.services[0].state != 'stopped' }}"
+
+- name: Download pinned WinSW service wrapper
+  ansible.windows.win_get_url:
+    url: "{{ valheim_windows_winsw_url }}"
+    dest: "{{ valheim_root }}\\service\\valheim-service.exe"
+    checksum: "{{ valheim_windows_winsw_sha256 }}"
+    checksum_algorithm: sha256
+
+- name: Render private service configuration
+  ansible.windows.win_template:
+    src: service.xml.j2
+    dest: "{{ valheim_root }}\\service\\valheim-service.xml"
+  no_log: true
+  diff: false
+
+- name: Register manual service without starting it
+  ansible.windows.win_command:
+    argv: ["{{ valheim_root }}\\service\\valheim-service.exe", install]
+    chdir: "{{ valheim_root }}\\service"
+  when: not valheim_windows_existing_service.exists
+
+- name: Enable firewall, launch and scheduled tasks only when requested
+  ansible.builtin.import_tasks: start.yml
+  when: valheim_start | bool

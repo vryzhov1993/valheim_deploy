@@ -1,0 +1,95 @@
+---
+- name: Refuse to share game ports with another process
+  ansible.windows.win_powershell:
+    script: |
+      param([string]$Root, [string]$ServiceName)
+      $Ansible.Changed = $false
+      $service = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+      foreach ($endpoint in @(Get-NetUDPEndpoint -LocalPort 2456,2457 -ErrorAction SilentlyContinue)) {
+          $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($endpoint.OwningProcess)"
+          if (-not $process -or $process.ExecutablePath -ine "$Root\server\valheim_server.exe" -or
+              $process.ParentProcessId -ne $service.ProcessId -or -not $service.ProcessId) {
+              throw 'UDP 2456/2457 is already used by another process. Stop that server explicitly before starting this one.'
+          }
+      }
+    parameters:
+      Root: "{{ valheim_root }}"
+      ServiceName: "{{ valheim_windows_service }}"
+
+- name: Allow game UDP traffic through Windows Firewall
+  community.windows.win_firewall_rule:
+    name: "{{ valheim_windows_service }} UDP"
+    direction: in
+    action: allow
+    protocol: udp
+    localport: 2456-2457
+    program: "{{ valheim_root }}\\server\\valheim_server.exe"
+    profiles: [domain, private, public]
+    enabled: true
+    state: present
+
+- name: Compare service configuration with the last applied revision
+  ansible.windows.win_powershell:
+    script: |
+      param([string]$Root)
+      $hash = (Get-FileHash -LiteralPath "$Root\service\valheim-service.xml" -Algorithm SHA256).Hash
+      $applied = "$Root\service\applied-config.sha256"
+      $old = if (Test-Path -LiteralPath $applied) { [IO.File]::ReadAllText($applied).Trim() } else { '' }
+      $Ansible.Changed = $false
+      $Ansible.Result = @{ hash = $hash; restart = ($hash -ne $old) }
+    parameters:
+      Root: "{{ valheim_root }}"
+  register: valheim_windows_revision
+  no_log: true
+
+- name: Apply service configuration and start the game
+  ansible.windows.win_service:
+    name: "{{ valheim_windows_service }}"
+    start_mode: "{{ 'auto' if valheim_windows_autostart == 'boot' else 'manual' }}"
+    state: "{{ 'restarted' if valheim_windows_revision.result.restart else 'started' }}"
+
+- name: Record applied service configuration
+  ansible.windows.win_copy:
+    content: "{{ valheim_windows_revision.result.hash }}"
+    dest: "{{ valheim_root }}\\service\\applied-config.sha256"
+  no_log: true
+
+- name: Configure startup on Windows logon
+  community.windows.win_scheduled_task:
+    name: "{{ valheim_windows_service }}-Start"
+    state: "{{ 'present' if valheim_windows_autostart == 'logon' else 'absent' }}"
+    username: SYSTEM
+    logon_type: service_account
+    run_level: highest
+    enabled: true
+    actions:
+      - path: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        arguments: >-
+          -NoProfile -NonInteractive -Command "Start-Service -Name {{ valheim_windows_service }} -ErrorAction Stop"
+    triggers:
+      - type: logon
+        user_id: "{{ valheim_windows_logon_user }}"
+    execution_time_limit: PT5M
+    multiple_instances: 2
+    disallow_start_if_on_batteries: false
+    stop_if_going_on_batteries: false
+
+- name: Schedule daily restart of an already running service
+  community.windows.win_scheduled_task:
+    name: "{{ valheim_windows_service }}-Restart"
+    description: Restart running Valheim at the configured Windows local time
+    username: SYSTEM
+    logon_type: service_account
+    run_level: highest
+    enabled: true
+    actions:
+      - path: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        arguments: >-
+          -NoProfile -NonInteractive -Command "if ((Get-Service -Name {{ valheim_windows_service }} -ErrorAction Stop).Status -eq 'Running') { Restart-Service -Name {{ valheim_windows_service }} -ErrorAction Stop }"
+    triggers:
+      - type: daily
+        start_boundary: "2020-01-01T{{ valheim_windows_restart_time }}"
+    execution_time_limit: PT5M
+    multiple_instances: 2
+    disallow_start_if_on_batteries: false
+    stop_if_going_on_batteries: false

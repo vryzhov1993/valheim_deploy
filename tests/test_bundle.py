@@ -1,6 +1,6 @@
 import io
 import json
-import tarfile
+import zipfile
 import unittest
 from binascii import hexlify, unhexlify
 
@@ -26,10 +26,10 @@ class BundleTests(unittest.TestCase):
         blob = encrypt(archive, b'a-test-password')
         self.assertTrue(blob.startswith(b'$ANSIBLE_VAULT;1.1;AES256\n'))
         plain = VaultLib([('default', VaultSecret(b'a-test-password'))]).decrypt(blob)
-        with tarfile.open(fileobj=io.BytesIO(plain)) as tar:
+        with zipfile.ZipFile(io.BytesIO(plain)) as archive:
             for name, data in files.items():
-                self.assertEqual(tar.extractfile('config/' + name).read(), data)
-            self.assertEqual(json.load(tar.extractfile('config/.valheim-bundle.json')), manifest)
+                self.assertEqual(archive.read('config/' + name), data)
+            self.assertEqual(json.loads(archive.read('config/.valheim-bundle.json')), manifest)
 
     def test_wrong_key_and_modified_ciphertext_are_rejected(self):
         blob = encrypt(b'binary\0save', b'correct-password')
@@ -54,6 +54,17 @@ class BundleTests(unittest.TestCase):
             del files['worlds_local/purgatory/_main.1' + suffix]
             with self.subTest(suffix=suffix), self.assertRaises(ValueError):
                 build_bundle(files, 'purgatory')
+
+    def test_windows_name_collisions_and_device_names_are_rejected(self):
+        for additions in [
+            {'bepinex/Example.cfg': b'a', 'bepinex/example.cfg': b'b'},
+            {'bepinex/NUL.txt': b'bad'},
+            {'bepinex/log:secret': b'bad'},
+            {'bepinex/trailing.': b'bad'},
+            {'bepinex/file': b'a', 'bepinex/file/child.cfg': b'b'},
+        ]:
+            with self.subTest(additions=list(additions)), self.assertRaises(ValueError):
+                build_bundle({**self.files(), **additions}, 'purgatory')
 
 
 if __name__ == '__main__':

@@ -24,7 +24,7 @@
 
 - name: Install archive tools and cron
   ansible.builtin.apt:
-    name: [ca-certificates, tar, gzip, cron]
+    name: [ca-certificates, tar, gzip, unzip, cron]
     state: present
     update_cache: true
     cache_valid_time: 3600

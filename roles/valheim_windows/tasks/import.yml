@@ -1,0 +1,42 @@
+---
+- name: Check import marker
+  ansible.windows.win_stat:
+    path: "{{ valheim_root }}\\config\\.valheim-bundle.json"
+  register: valheim_windows_imported
+
+- name: Transfer encrypted bundle for first import
+  when: not valheim_windows_imported.stat.exists
+  block:
+    - name: Transfer and decrypt Vault ZIP
+      ansible.windows.win_copy:
+        src: "{{ valheim_bundle }}"
+        dest: "{{ valheim_root }}\\service\\initial-bundle.zip"
+        decrypt: true
+      no_log: true
+      diff: false
+
+    - name: Validate checksums and atomically import world
+      ansible.windows.win_powershell:
+        script: |
+          param([string]$Root, [string]$Archive, [string]$World)
+          {{ lookup('ansible.builtin.file', role_path ~ '/files/deployment.ps1') }}
+          $Ansible.Changed = Import-WorldBundle -Root $Root -Archive $Archive -World $World
+        parameters:
+          Root: "{{ valheim_root }}"
+          Archive: "{{ valheim_root }}\\service\\initial-bundle.zip"
+          World: "{{ valheim_world }}"
+  always:
+    - name: Remove decrypted ZIP after import
+      ansible.windows.win_file:
+        path: "{{ valheim_root }}\\service\\initial-bundle.zip"
+        state: absent
+
+- name: Verify identity without importing the world again
+  ansible.windows.win_powershell:
+    script: |
+      param([string]$Root, [string]$World)
+      {{ lookup('ansible.builtin.file', role_path ~ '/files/deployment.ps1') }}
+      $Ansible.Changed = Import-WorldBundle -Root $Root -Archive '' -World $World
+    parameters:
+      Root: "{{ valheim_root }}"
+      World: "{{ valheim_world }}"

@@ -1,6 +1,16 @@
 ---
-- name: Prepare or deploy Valheim on a Linux VPS
+- name: Prepare or deploy Valheim on Linux or Windows
   hosts: valheim
-  become: true
-  roles:
-    - valheim
+  become: false
+  tasks:
+    - name: Deploy Linux Docker server
+      ansible.builtin.include_role:
+        name: valheim
+        apply:
+          become: true
+      when: ansible_facts['os_family'] != 'Windows'
+
+    - name: Deploy native Windows server
+      ansible.builtin.include_role:
+        name: valheim_windows
+      when: ansible_facts['os_family'] == 'Windows'

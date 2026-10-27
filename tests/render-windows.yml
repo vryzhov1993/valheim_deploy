@@ -1,0 +1,25 @@
+---
+- name: Render Windows service configuration with synthetic secrets
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/valheim_windows/defaults/main.yml
+  tasks:
+    - name: Use fixture values with spaces and XML and command-line metacharacters
+      ansible.builtin.set_fact:
+        valheim_root: 'C:\Valheim Server & Data'
+        valheim_server_name: 'Purgatory & "Friends"'
+        valheim_server_password: 'test & "quoted"\end\'
+
+    - name: Create ignored output directory
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../.local"
+        state: directory
+        mode: '0700'
+
+    - name: Render service XML through the real Ansible Windows quote filter
+      ansible.builtin.template:
+        src: ../roles/valheim_windows/templates/service.xml.j2
+        dest: "{{ playbook_dir }}/../.local/windows-service-test.xml"
+        mode: '0600'

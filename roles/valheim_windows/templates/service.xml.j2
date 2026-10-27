@@ -1,0 +1,17 @@
+<service>
+  <id>{{ valheim_windows_service | e }}</id>
+  <name>Valheim Dedicated Server</name>
+  <description>Valheim dedicated server managed by Ansible</description>
+  <executable>{{ (valheim_root ~ '\\server\\valheim_server.exe') | e }}</executable>
+  <workingdirectory>{{ (valheim_root ~ '\\server') | e }}</workingdirectory>
+  <arguments>{{ ['-nographics', '-batchmode', '-name', valheim_server_name, '-port', '2456', '-world', valheim_world, '-password', valheim_server_password, '-savedir', valheim_root ~ '\\config', '-public', (valheim_public | bool) | ternary('1', '0'), '-saveinterval', '600', '-backups', ((valheim_backups_max_age | int) * 24) | string, '-backupshort', '3600', '-backuplong', '3600', '-logFile', valheim_root ~ '\\logs\\server.log'] | ansible.windows.quote | e }}</arguments>
+  <env name="SteamAppId" value="892970" />
+  <startmode>Manual</startmode>
+  <stoptimeout>120 sec</stoptimeout>
+  <onfailure action="restart" delay="10 sec" />
+  <logpath>{{ (valheim_root ~ '\\logs') | e }}</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>3</keepFiles>
+  </log>
+</service>

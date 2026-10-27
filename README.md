@@ -1,10 +1,10 @@
-# Valheim на VPS через Ansible
+# Valheim на Linux и Windows через Ansible
 
-Репозиторий автоматизирует установку и настройку выделенного сервера Valheim на Linux VPS. Ansible-роль устанавливает Docker Engine и Compose, импортирует мир `purgatory` с серверными модами, настраивает резервное копирование и ежедневный рестарт. По умолчанию **игра не запускается**: подготовка и запуск выполняются отдельными командами.
+Репозиторий автоматизирует установку и настройку выделенного сервера Valheim. На Linux используется Docker Compose, на Windows — нативный Dedicated Server и служба WinSW. Общий playbook выбирает роль по платформе, импортирует мир `purgatory` с серверными модами и настраивает резервное копирование. По умолчанию **игра не запускается**: подготовка и запуск выполняются отдельными командами.
 
 ## Мир и секреты
 
-В `files/server-bundle.tar.gz.vault` лежат мир, серверные DLL, конфигурации модов и списки доступа для первоначальной установки. Пароль игры хранится отдельно в `group_vars/valheim/vault.yml`. Оба файла зашифрованы Ansible Vault, AES256.
+В `files/server-bundle.zip.vault` лежат мир, серверные DLL, конфигурации модов и списки доступа для первоначальной установки на обеих платформах. Пароль игры хранится отдельно в `group_vars/valheim/vault.yml`. Оба файла зашифрованы Ansible Vault, AES256.
 
 Для расшифровки сохраните пароль Vault в локальном `.vault-pass`, который исключён из Git. Вместо `--vault-password-file .vault-pass` можно использовать `--ask-vault-pass` для интерактивного ввода. Пароль игры и пароль Vault — разные секреты. Локальный inventory и служебные каталоги `.venv` и `.local` также исключены из Git.
 
@@ -12,13 +12,14 @@ Blob используется только при первом импорте. �
 
 ## Требования
 
-- VPS с **x86_64 / amd64**, Debian 12/13 или Ubuntu 22.04/24.04/26.04, systemd, Python 3, SSH и sudo/root.
+- Linux: **x86_64 / amd64**, Debian 12/13 или Ubuntu 22.04/24.04/26.04, systemd, Python 3, SSH и sudo/root.
+- Windows: **amd64**, Windows 11 или Windows Server 2022/2025, Windows PowerShell 5.1, .NET Framework 4.8, встроенный OpenSSH Server не ниже 7.9 и административная SSH-сессия. Python на целевой Windows не нужен.
 - Практический ориентир: 8 ГБ RAM и 20 ГБ свободного диска; лимит контейнера по умолчанию 6 ГБ. ARM VPS роль отклоняет.
 - Машина запуска Ansible: Linux, macOS или WSL, Python **3.12+**. Обычный PowerShell не является поддерживаемым контроллером Ansible.
 
-Роль устанавливает Docker Engine и Compose plugin из официального apt-репозитория. Для машины с уже установленным Docker задайте `valheim_install_docker: false`; Compose plugin должен быть не ниже 2.18. Старые конфликтующие пакеты `docker.io` / `containerd` роль автоматически не удаляет.
+Linux-роль устанавливает Docker Engine и Compose plugin из официального apt-репозитория. Для машины с уже установленным Docker задайте `valheim_install_docker: false`; Compose plugin должен быть не ниже 2.18. Старые конфликтующие пакеты `docker.io` / `containerd` роль автоматически не удаляет.
 
-## Подготовка и запуск
+## Подготовка и запуск на Linux
 
 На Linux/WSL, из каталога репозитория:
 
@@ -49,6 +50,61 @@ ansible-playbook -i inventory.yml deploy.yml --vault-password-file .vault-pass -
 
 Повторный запуск playbook **не импортирует мир заново**: маркер находится в `config/.valheim-bundle.json`. Если каталог уже заполнен, а маркера нет, импорт завершится ошибкой без перезаписи данных. Не удаляйте маркер для обновления работающего мира. `valheim_start=false` пропускает запуск; уже работающий сервер эта настройка не останавливает и установленный cron не отключает.
 
+## Подготовка и запуск на Windows
+
+Запускайте Ansible с Linux/macOS/WSL, используя те же `requirements.txt`, `requirements.yml` и пароль Vault. На Windows предварительно настройте встроенный SSH Server и вход по ключу для администратора. Пример из [документации Ansible](https://docs.ansible.com/projects/ansible/latest/os_guide/windows_ssh.html), выполнять в повышенном PowerShell:
+
+```powershell
+Get-WindowsCapability -Online -Name OpenSSH.Server* | Add-WindowsCapability -Online
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+New-ItemProperty -Path HKLM:\SOFTWARE\OpenSSH -Name DefaultShell -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force
+```
+
+Разрешите TCP 22 только с адреса Ansible-контроллера. Для администратора публичный SSH-ключ обычно находится в `C:\ProgramData\ssh\administrators_authorized_keys`; права на файл должны быть ограничены группой Administrators и SYSTEM. Проверка `ssh Administrator@IP_WINDOWS` должна открывать PowerShell. Настройка SSH и ключей выполняется отдельно от игровой роли.
+
+Скопируйте пример inventory, укажите адрес, административного пользователя и SSH-ключ:
+
+```bash
+cp inventory.windows.example.yml inventory.windows.yml
+ansible-playbook -i inventory.windows.yml deploy.yml --vault-password-file .vault-pass
+```
+
+Эта команда установит при необходимости Visual C++ Runtime, скачает Windows Dedicated Server через SteamCMD, установит BepInEx 5.4.2351, импортирует мир и зарегистрирует службу **без запуска**. WinSW 2.12.0 и BepInEx скачиваются с проверкой SHA-256. При необходимости перезагрузки после установки runtime роль попросит перезагрузить Windows вручную и повторить команду; сама ОС не перезагружается.
+
+Включить сервер, игровые правила Firewall и задания запуска/рестарта:
+
+```bash
+ansible-playbook -i inventory.windows.yml deploy.yml --vault-password-file .vault-pass -e valheim_start=true
+```
+
+По умолчанию каталог — `C:\ValheimServer`, служба — `ValheimDedicatedServer`. В `inventory.windows.yml` можно задать `valheim_root` для отдельного каталога сервера. Первый запуск роли принимает только пустой каталог; существующие установки автоматически не присоединяются.
+
+| Windows-настройка | Поведение |
+|---|---|
+| `valheim_windows_autostart: logon` | По умолчанию: запуск при входе пользователя `ansible_user` |
+| `valheim_windows_logon_user` | Позволяет указать другого пользователя для триггера входа |
+| `valheim_windows_autostart: boot` | Автоматический запуск службы при загрузке Windows |
+| `valheim_windows_restart_time: '05:00:00'` | Ежедневный рестарт работающего сервера по локальному времени Windows |
+| Автосохранение и копии | Сохранение каждые 10 минут; до 168 встроенных почасовых копий при хранении 7 дней |
+
+Windows-роль не меняет часовой пояс ОС. Для 05:00 по Кишинёву время Windows должно соответствовать Кишинёву (`E. Europe Standard Time`). Пропущенные интервалы при выключенном ПК не создают бэкапы. Вручную остановленный сервер ежедневное задание не запускает.
+
+Мир и конфигурации находятся в `config`, игровые файлы — в `server`, логи — в `logs`, закрытый XML службы — в `service`. BepInEx использует junction-каталоги к `config\bepinex`, поэтому конфигурации и моды не дублируются. Служба работает как LocalSystem; каталог доступен Administrators и SYSTEM. Устанавливайте только доверенные моды, поскольку они выполняются с правами службы. Пароль игры на целевой машине хранится в защищённом XML и передаётся игре штатным аргументом командной строки.
+
+При повторной подготовке игра не запускается и не останавливается, автозапуск и действующие задания не отключаются. Мир не перезаписывается. Если поменять параметры службы, следующий запуск playbook с `valheim_start=true` применит их с перезапуском. Для обновления BepInEx сначала штатно остановите службу.
+
+Управление на Windows из повышенного PowerShell:
+
+```powershell
+Get-Service ValheimDedicatedServer
+Get-Content 'C:\ValheimServer\logs\server.log' -Tail 100 -Wait
+Stop-Service ValheimDedicatedServer
+Start-Service ValheimDedicatedServer
+```
+
+WinSW посылает консольному процессу сигнал штатной остановки и ждёт до 120 секунд, затем принудительно завершает зависший процесс. Windows-роль скачивает игру при первой установке; периодические обновления SteamCMD не включены. Для обновления остановите службу, выполните `steamcmd\steamcmd.exe +force_install_dir "C:\ValheimServer\server" +login anonymous +app_update 896660 validate +quit`, затем запустите службу. При собственном `valheim_root` измените пути в этих командах.
+
 ## Сеть
 
 В сетевом firewall/security group провайдера разрешите входящие **UDP 2456–2457** на VPS. SSH оставьте доступным для администрирования. К VPS с публичным адресом игроки подключаются напрямую.
@@ -69,7 +125,7 @@ ansible-vault view group_vars/valheim/vault.yml --vault-password-file .vault-pas
 | Модификаторы мира | Сохранены из сейва, включая ресурсы ×2; роль их не переопределяет |
 | Игроки | 10, в перенесённой конфигурации NPS |
 | Сохранение | Каждые 10 минут |
-| Бэкап | Каждый час в `:05`, ZIP в `/opt/valheim/config/backups`, хранение 7 дней |
+| Бэкап на Linux | Каждый час в `:05`, ZIP в `/opt/valheim/config/backups`, хранение 7 дней |
 | Рестарт | Контейнер ежедневно в 05:00 Europe/Chisinau, только если он уже работает |
 | Обновления | Игра и BepInEx проверяются каждые 15 минут, обновление при отсутствии игроков |
 | Остановка | Grace period 120 секунд |
@@ -125,7 +181,7 @@ sudo docker compose -p valheim start valheim
 python -m tools.pack_bundle /path/to/stopped-server/config --world purgatory --password-file .vault-pass
 ```
 
-Инструмент сохраняет полную папку мира, конфиги, активные плагины и списки доступа. Проверяет наличие завершённых поколений сейва, отвергает symlink и опасные пути. Открытый tar на диск не записывается. Серверный пароль хранится в отдельном Vault-файле и при упаковке не меняется.
+Инструмент сохраняет полную папку мира, конфиги, активные плагины и списки доступа. Проверяет наличие завершённых поколений сейва, отвергает symlink, опасные пути и несовместимые с Windows имена. Открытый ZIP на диск не записывается. Серверный пароль хранится в отдельном Vault-файле и при упаковке не меняется.
 
 Обновлённый blob используется только для **новых** установок. Для замены уже импортированного мира требуется отдельная штатная остановка и резервное копирование старого `config`, затем импорт в пустой каталог. Существующий мир роль автоматически не заменяет.
 
@@ -134,9 +190,13 @@ python -m tools.pack_bundle /path/to/stopped-server/config --world purgatory --p
 ```bash
 python -m unittest discover -s tests -v
 ansible-playbook -i localhost, deploy.yml --syntax-check
+ansible-playbook -i localhost, tests/syntax-windows.yml --syntax-check
+ansible-playbook -i localhost, tests/render-windows.yml
 python -m tests.smoke
 ```
 
 Последняя команда требует отдельной Linux-машины с Docker Compose и sudo без пароля. Она работает в `/tmp/valheim-ansible-smoke` (каталог должен отсутствовать), использует синтетический Vault blob, проверяет повторный импорт, сохранение нового прогресса, отказ при наличии существующего мира и отсутствие запущенного/созданного контейнера. Для неё ключ настоящего мира не нужен. Тесты также настроены в GitHub Actions.
 
-Ansible `--check` на чистом VPS не заменяет реальную подготовку: отсутствующие пакеты и каталоги не создаются, импорт tar.gz в этом режиме пропускается. Реальное подключение игроков проверяется после явного запуска.
+Windows-проверки запускаются командой `powershell.exe -NoProfile -File tests\windows.ps1`. Проверяются импорт, контрольные суммы, защита путей, сохранение прогресса и junction-каталоги BepInEx. В GitHub Actions добавлен запуск с `-TestService`: на временной Windows-машине устанавливается WinSW и проверяется штатная остановка синтетического консольного процесса; Valheim не запускается.
+
+Ansible `--check` на чистой машине не заменяет реальную подготовку: отсутствующие пакеты и каталоги не создаются, импорт пропускается. Реальное подключение игроков проверяется после явного запуска.

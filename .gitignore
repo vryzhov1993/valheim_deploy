@@ -1,7 +1,8 @@
 .venv/
 .local/
 .vault-pass
-inventory.yml
+inventory*.yml
+!inventory*.example.yml
 __pycache__/
 *.pyc
 *.retry
